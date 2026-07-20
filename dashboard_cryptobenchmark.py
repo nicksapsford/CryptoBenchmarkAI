@@ -4,6 +4,7 @@ Port 5021. Minimal command view: portfolio, BTC + ETH status, Lancelot, and the
 prominent WITH/AGAINST direction switch (live reload -- flips with no restart).
 All times UTC.
 """
+import csv
 import time
 import logging
 from datetime import datetime, timezone
@@ -17,6 +18,40 @@ BASE_DIR = Path(__file__).resolve().parent
 _VER = BASE_DIR / "VERSION"
 APP_VERSION = _VER.read_text().strip() if _VER.exists() else "1.0.0"
 PORT = 5021
+TRADES_BTC = BASE_DIR / "logs" / "trades.csv"
+TRADES_ETH = BASE_DIR / "logs" / "eth_trades.csv"
+
+
+def _read_one(path, inst, rows):
+    if not path.exists():
+        return
+    try:
+        with path.open(newline="", encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                try:
+                    pnlf = round(float(r.get("pnl_gbp")), 2)
+                except (TypeError, ValueError):
+                    pnlf = None
+                rows.append({
+                    "inst": inst,
+                    "date": r.get("date", ""), "time": r.get("time", ""),
+                    "direction": r.get("direction", ""),
+                    "entry": r.get("entry_price", ""), "exit": r.get("exit_price", ""),
+                    "pnl_gbp": pnlf,
+                    "result": ("WIN" if pnlf >= 0 else "LOSS") if pnlf is not None else "--",
+                    "reason": r.get("exit_reason", ""),
+                })
+    except Exception:
+        pass
+
+
+def _read_trades(limit=300):
+    """Merge BTC + ETH trade history, most recent first (by date+time)."""
+    rows = []
+    _read_one(TRADES_BTC, "BTC", rows)
+    _read_one(TRADES_ETH, "ETH", rows)
+    rows.sort(key=lambda x: (x["date"], x["time"]), reverse=True)
+    return rows[:limit]
 
 logging.basicConfig(level=logging.WARNING)
 logging.Formatter.converter = time.gmtime
@@ -53,13 +88,25 @@ header{background:var(--bg2);border-bottom:2px solid var(--teal);padding:10px 18
 .lanc-clear{color:var(--green);} .lanc-block{color:var(--amber);} .lanc-trade{color:var(--teal);}
 .port{grid-column:1/-1;} .big{font-size:20px;font-weight:700;}
 .note{color:var(--mut);font-size:10px;margin-top:14px;line-height:1.5;text-align:center;}
+.nav{display:flex;align-items:center;gap:10px;}
+.navbtn{font-size:12px;font-weight:700;color:var(--teal);background:rgba(255,255,255,0.06);border:1px solid var(--teal);padding:5px 12px;border-radius:6px;cursor:pointer;text-decoration:none;}
+.navbtn:hover{background:rgba(255,255,255,0.12);}
+table.tr{width:100%;border-collapse:collapse;font-size:12px;min-width:560px;}
+table.tr th{text-align:left;color:var(--mut);border-bottom:1px solid var(--bd);padding:7px 8px;font-weight:600;}
+table.tr td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,0.04);}
+.win{color:var(--green);font-weight:700;} .loss{color:var(--red);font-weight:700;}
+.tag-BTC{color:var(--amber);font-weight:700;} .tag-ETH{color:var(--purple);font-weight:700;}
 </style></head><body>
 <header>
   <div class="brand">CRYPTO<span style="color:var(--purple)">BENCHMARK</span> A.I.
     <small>__VER__ &middot; port 5021 &middot; 24/7 &middot; Lancelot + 3-TF SSL + switch</small></div>
-  <div class="clock" id="clock">--:--:-- UTC</div>
+  <div class="nav">
+    <button class="navbtn" id="toPnl" onclick="showPage(2)">P&amp;L &rarr;</button>
+    <div class="clock" id="clock">--:--:-- UTC</div>
+  </div>
 </header>
 <div class="wrap">
+  <div id="page1">
   <div class="switch-bar">
     <span class="lbl">Direction Switch</span>
     <button class="sw-btn" id="swWITH" onclick="setDir('WITH')">WITH</button>
@@ -73,6 +120,14 @@ header{background:var(--bg2);border-bottom:2px solid var(--teal);padding:10px 18
   </div>
   <div class="note">Benchmark Desk &mdash; pure Lancelot + 3-timeframe SSL agreement, traded WITH or AGAINST.
     No Arthur, Morgan, Guinevere or phantom logging. Paper trading only.</div>
+  </div><!-- /page1 -->
+  <div id="page2" style="display:none;">
+    <div style="margin-bottom:14px;"><button class="navbtn" onclick="showPage(1)">&larr; Back to Dashboard</button></div>
+    <div class="card">
+      <div style="font-size:16px;font-weight:800;color:var(--teal);margin-bottom:12px;">Trade History &mdash; P&amp;L (BTC + ETH)</div>
+      <div id="pnlBody" style="overflow-x:auto;">Loading...</div>
+    </div>
+  </div><!-- /page2 -->
 </div>
 <script>
 function clk(){var t=new Date();document.getElementById('clock').textContent=
@@ -126,6 +181,25 @@ function poll(){
   fetch('/api/direction').then(function(r){return r.json();}).then(renderDir).catch(function(e){});
 }
 poll();setInterval(poll,5000);
+function showPage(n){
+  document.getElementById('page1').style.display=(n===1?'':'none');
+  document.getElementById('page2').style.display=(n===2?'':'none');
+  if(n===2){loadTrades();}
+}
+function loadTrades(){
+  fetch('/api/trades').then(function(r){return r.json();}).then(function(d){
+    var t=d.trades||[];
+    if(!t.length){document.getElementById('pnlBody').innerHTML='<div class="mut">No trades recorded yet.</div>';return;}
+    var h='<table class="tr"><thead><tr><th>Date</th><th>Time</th><th>Mkt</th><th>Dir</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Result</th></tr></thead><tbody>';
+    for(var i=0;i<t.length;i++){var r=t[i];
+      var rc=r.result==='WIN'?'win':(r.result==='LOSS'?'loss':'mut');
+      h+='<tr><td>'+r.date+'</td><td>'+r.time+'</td><td class="tag-'+r.inst+'">'+r.inst+'</td><td>'+r.direction+'</td><td>'+r.entry+'</td><td>'+r.exit+'</td>'+
+         '<td class="'+rc+'">'+money(r.pnl_gbp)+'</td><td class="'+rc+'">'+r.result+'</td></tr>';
+    }
+    h+='</tbody></table>';
+    document.getElementById('pnlBody').innerHTML=h;
+  }).catch(function(e){document.getElementById('pnlBody').innerHTML='<div class="loss">Error loading trades.</div>';});
+}
 </script>
 </body></html>"""
 
@@ -161,6 +235,11 @@ def api_direction():
         return jsonify(direction_switch.set_mode(body.get("mode"), set_by=by))
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/trades")
+def api_trades():
+    return jsonify({"trades": _read_trades()})
 
 
 @app.route("/api/health")

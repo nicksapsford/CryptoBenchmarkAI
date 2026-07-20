@@ -246,6 +246,7 @@ def _inst_state(inst, price):
     trade = strat.current_trade
     pos = None
     floating = 0.0
+    locked = None
     if trade is not None:
         try:
             if trade.direction == "LONG":
@@ -254,10 +255,12 @@ def _inst_state(inst, price):
                 floating = trade.position_size_gbp * ((trade.entry_price - price) / trade.entry_price)
         except Exception:
             floating = 0.0
+        lf = getattr(trade, "ladder_floor_gbp", 0.0) or 0.0
+        locked = round(lf, 2) if lf > 0 else None
         pos = {"direction": trade.direction, "entry": round(trade.entry_price, 2),
                "stop": round(trade.stop_loss, 2), "target": round(trade.take_profit, 2),
                "size_gbp": round(trade.position_size_gbp, 2),
-               "floating_gbp": round(floating, 2)}
+               "floating_gbp": round(floating, 2), "locked_gbp": locked}
     lc = inst.last_checks or {}
     lanc = "CLEAR" if lc.get("passed") else ("BLOCKED: " + str(lc.get("reason") or "--"))
     if strat.in_trade:
@@ -268,6 +271,7 @@ def _inst_state(inst, price):
         "in_trade": strat.in_trade,
         "position": pos,
         "floating_gbp": round(floating, 2),
+        "locked_gbp": locked,
         "balance": round(strat.capital_gbp, 2),
         "today_pnl": round(inst.account.get("daily_pnl_gbp", 0.0), 2),
         "signal": inst.last_signal or "--",
