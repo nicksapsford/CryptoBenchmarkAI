@@ -93,6 +93,20 @@ def record_account(account: dict, pnl_gbp: float) -> None:
         account["consecutive_losses"] = 0
 
 
+def reset_daily_account(account: dict) -> None:
+    """Benchmark daily-reset fix (22 Jul 2026). Clear the daily loss tally and the
+    daily-loss kill switch on a new UTC trading day so yesterday's loss does not carry
+    into today. Previously daily_pnl_gbp was zeroed ONLY at process start, so a prior
+    day's loss permanently re-triggered the kill switch until a manual restart."""
+    account["daily_pnl_gbp"] = 0.0
+    account["consecutive_losses"] = 0
+    account["killed"] = False
+    account["kill_tier"] = 0
+    account["kill_reason"] = ""
+    account["kill_time"] = None
+    account["kill_wait_hours"] = 0
+
+
 # ── SSL 3-timeframe agreement (the benchmark's direction signal) ──────────────
 
 def _ssl(bar):
@@ -336,6 +350,7 @@ def main() -> None:
     last_candle = 0.0
     last_monitor = 0.0
     last_push = 0.0
+    current_day = datetime.now(timezone.utc).date()  # Benchmark daily-reset fix
 
     while not _SHUTDOWN:
         try:
@@ -343,6 +358,16 @@ def main() -> None:
                 log.info("Shutdown flag seen -- stopping (left for watchdog).")
                 break
             now = time.monotonic()
+
+            # Benchmark daily-reset fix (22 Jul 2026): on a new UTC trading day, clear
+            # each instrument's daily loss + kill switch so yesterday's loss does not
+            # carry into today (CryptoBenchmark is 24/7 -> resets at 00:00 UTC).
+            today_utc = datetime.now(timezone.utc).date()
+            if today_utc != current_day:
+                current_day = today_utc
+                for inst in (btc, eth):
+                    reset_daily_account(inst.account)
+                log.info("New UTC trading day %s -- daily P&L + kill switch reset (BTC+ETH).", today_utc)
 
             # In-trade risk monitor (every 30s)
             if (now - last_monitor) >= MONITOR_SECONDS:
