@@ -28,6 +28,7 @@ CSV_HEADERS = [
     "position_size_gbp", "pnl_gbp", "pnl_pct",
     "exit_reason", "capital_after",
     "entry_time", "exit_time",
+    "mae_pts", "mae_gbp", "mfe_pts", "mfe_gbp",
 ]
 
 
@@ -40,6 +41,7 @@ class PaperTrader:
             log.info("Created new trades log: %s", TRADES_LOG)
         else:
             log.info("Using existing trades log: %s", TRADES_LOG)
+        self._migrate_csv(TRADES_LOG)
         self.strategy = BTCStrategy(capital_gbp=STARTING_CAPITAL_GBP)
         previous_capital = self._load_last_capital()
         if previous_capital:
@@ -65,6 +67,29 @@ class PaperTrader:
         except Exception:
             return None
 
+    def _migrate_csv(self, path) -> None:
+        """One-time: if an existing trades.csv predates the MAE/MFE columns, rewrite it with
+        the full header (old rows get blank MAE/MFE cells) so DictWriter stays aligned."""
+        try:
+            if not path.exists():
+                return
+            with open(path, newline="", encoding="utf-8") as f:
+                rows = list(csv.reader(f))
+            if not rows:
+                return
+            header = rows[0]
+            if all(h in header for h in CSV_HEADERS):
+                return
+            data = [dict(zip(header, r)) for r in rows[1:]]
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=CSV_HEADERS)
+                w.writeheader()
+                for d in data:
+                    w.writerow({k: d.get(k, "") for k in CSV_HEADERS})
+            log.info("Migrated trades log to MAE/MFE schema: %s", path)
+        except Exception as e:
+            log.warning("trades.csv migration skipped: %s", e)
+
     def _log_trade(self, trade: Trade) -> None:
         if trade.exit_price is None:
             return
@@ -82,6 +107,10 @@ class PaperTrader:
             "capital_after":      f"{self.strategy.capital_gbp:.2f}",
             "entry_time":         trade.entry_time.strftime("%Y-%m-%d %H:%M:%S"),
             "exit_time":          now.strftime("%Y-%m-%d %H:%M:%S"),
+            "mae_pts":            f"{trade.mae_pts:.2f}",
+            "mae_gbp":            f"{trade.mae_gbp:.2f}",
+            "mfe_pts":            f"{trade.mfe_pts:.2f}",
+            "mfe_gbp":            f"{trade.mfe_gbp:.2f}",
         }
         with open(TRADES_LOG, "a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)

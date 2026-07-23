@@ -175,6 +175,7 @@ def monitor_position(inst, price) -> bool:
     except Exception as exc:
         log.warning("[%s] ladder update failed: %s", inst.label, exc)
     trade.update_trailing_stop(price)
+    trade.update_excursions(price)             # MAE/MFE tracking (Commission 009)
     reason = trade.check_exit(price)
     if not reason:
         return False

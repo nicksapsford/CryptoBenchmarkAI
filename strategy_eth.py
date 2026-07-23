@@ -35,9 +35,12 @@ MIN_1H_INDICATORS   = 4      # minimum 1h indicators for trend confirmation
 # (18 Jul 2026, System 2 Review). Mirrors strategy_btc.py; previously absent on
 # ETH (main called apply_profit_ladder on a method that did not exist).
 PROFIT_LADDER = [
-    {"trigger_gbp": 15.00, "floor_gbp": 12.00},
-    {"trigger_gbp": 35.00, "floor_gbp": 30.00},
-    {"trigger_gbp": 60.00, "floor_gbp": 52.00},
+    # Rescaled for the momentum-scalping regime (Gaius Commission 009, 23 Jul 2026):
+    # a 2%-target trade on a ~GBP300 position floats ~GBP6 max, so the old GBP15/35/60
+    # ladder (trend era) could NEVER fire. Steps at ~33/58/83% of the ~GBP6 target.
+    {"trigger_gbp": 2.00, "floor_gbp": 1.50},
+    {"trigger_gbp": 3.50, "floor_gbp": 3.00},
+    {"trigger_gbp": 5.00, "floor_gbp": 4.50},
 ]
 
 
@@ -137,6 +140,36 @@ class Trade:
                         "  [ETH] Trailing stop moved DOWN to GBP %.4f (price=GBP %.4f)",
                         self.stop_loss, current_price
                     )
+
+    def update_excursions(self, price: float) -> None:
+        """MAE/MFE tracking (Gaius Commission 009). Records the peak FAVOURABLE (mfe) and
+        worst ADVERSE (mae) excursion, as a fraction of entry, reached while the trade is
+        open. Analysis only -- never affects stops, exits or the ladder."""
+        if not hasattr(self, "mfe_pct"):
+            self.mfe_pct = 0.0
+            self.mae_pct = 0.0
+        fav = ((price - self.entry_price) / self.entry_price) if self.direction == "LONG" \
+            else ((self.entry_price - price) / self.entry_price)
+        if fav > self.mfe_pct:
+            self.mfe_pct = fav
+        if -fav > self.mae_pct:
+            self.mae_pct = -fav
+
+    @property
+    def mfe_gbp(self) -> float:
+        return round(self.position_size_gbp * getattr(self, "mfe_pct", 0.0), 2)
+
+    @property
+    def mae_gbp(self) -> float:
+        return round(self.position_size_gbp * getattr(self, "mae_pct", 0.0), 2)
+
+    @property
+    def mfe_pts(self) -> float:
+        return round(self.entry_price * getattr(self, "mfe_pct", 0.0), 2)
+
+    @property
+    def mae_pts(self) -> float:
+        return round(self.entry_price * getattr(self, "mae_pct", 0.0), 2)
 
     def check_exit(self, current_price: float) -> Optional[str]:
         if self.direction == "LONG":
@@ -363,6 +396,7 @@ class ETHStrategy:
         if self.in_trade:
             trade = self.current_trade
             trade.update_trailing_stop(current_price)
+            trade.update_excursions(current_price)   # MAE/MFE (Commission 009)
             exit_reason = trade.check_exit(current_price)
             if exit_reason:
                 self._close_trade(current_price, exit_reason)
