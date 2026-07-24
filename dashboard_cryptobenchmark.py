@@ -5,6 +5,9 @@ prominent WITH/AGAINST direction switch (live reload -- flips with no restart).
 All times UTC.
 """
 import csv
+import os
+import signal
+import threading
 import time
 import logging
 from datetime import datetime, timezone
@@ -15,6 +18,8 @@ from flask import Flask, Response, jsonify, request
 import direction_switch
 
 BASE_DIR = Path(__file__).resolve().parent
+LOG_DIR = BASE_DIR / "logs"
+SHUTDOWN_FLAG = LOG_DIR / "shutdown.flag"
 _VER = BASE_DIR / "VERSION"
 APP_VERSION = _VER.read_text().strip() if _VER.exists() else "1.0.0"
 PORT = 5021
@@ -55,6 +60,7 @@ def _read_trades(limit=300):
 
 logging.basicConfig(level=logging.WARNING)
 logging.Formatter.converter = time.gmtime
+log = logging.getLogger("dashboard")
 app = Flask(__name__)
 _state = {"system": "CryptoBenchmark", "version": APP_VERSION}
 
@@ -240,6 +246,24 @@ def api_direction():
 @app.route("/api/trades")
 def api_trades():
     return jsonify({"trades": _read_trades()})
+
+
+@app.route("/api/shutdown", methods=["POST"])
+def api_shutdown():
+    """Write the shutdown flag for the engine + watchdog, then kill this dashboard.
+    Used by the BenchmarkRoundTable SHUTDOWN ALL fan-out (POST /api/shutdown)."""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        SHUTDOWN_FLAG.write_text("shutdown requested\n", encoding="utf-8")
+        log.info("Shutdown flag written -- engine will exit on next check")
+    except Exception as e:
+        log.warning("Could not write shutdown flag: %s", e)
+
+    def _kill():
+        time.sleep(0.5)
+        os.kill(os.getpid(), signal.SIGTERM)
+    threading.Thread(target=_kill, daemon=True).start()
+    return jsonify({"status": "shutting_down"})
 
 
 @app.route("/api/health")
