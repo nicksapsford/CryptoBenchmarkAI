@@ -207,7 +207,7 @@ def monitor_position(inst, price) -> bool:
 
 # ── One instrument candle tick: STEP 1 Lancelot -> STEP 2 SSL -> STEP 3 switch ─
 
-def instrument_tick(inst, btc_atr):
+def instrument_tick(inst, btc_atr, btc_price=None):
     feed = inst.feed
     feed.refresh()
     try:
@@ -224,7 +224,7 @@ def instrument_tick(inst, btc_atr):
         return
 
     # ---- Flat: look for a benchmark entry ----
-    checks = inst.pre_check_fn(bar_1h, bar_5m, inst.account, None, bar_1d, btc_atr)
+    checks = inst.pre_check_fn(bar_1h, bar_5m, inst.account, None, bar_1d, btc_atr, btc_price)
     inst.last_checks = checks
     signal_dir = ssl_agreement(bar_1d, bar_1h, bar_5m)
     inst.last_signal = signal_dir
@@ -385,12 +385,15 @@ def main() -> None:
             if (now - last_candle) >= CANDLE_SECONDS:
                 try:
                     btc.feed.refresh()
-                    btc_atr = btc.feed.latest_bar("5m").get("atr")   # shared vol gate
+                    btc_bar5 = btc.feed.latest_bar("5m")             # shared vol gate
+                    btc_atr = btc_bar5.get("atr")
+                    btc_price = btc_bar5.get("close")                # Commission 016: %-of-price floor/ceiling
                 except Exception:
                     btc_atr = None
+                    btc_price = None
                 for inst in (btc, eth):
                     try:
-                        instrument_tick(inst, btc_atr)
+                        instrument_tick(inst, btc_atr, btc_price)
                     except Exception as exc:
                         log.warning("[%s] tick error: %s", inst.label, exc)
                 last_candle = now
